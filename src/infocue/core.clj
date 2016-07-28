@@ -73,18 +73,60 @@
   "The fake user agent we use"
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36")
 
+(defn fetch-image
+  [url]
+  (let [outfile (str "image-" (last (split url #"/")))]
+    (println "fetching" url "to" outfile "...")
+    (with-open [in (:body (http/get url {:as :stream}))
+                out (io/output-stream outfile)]
+      (io/copy in out))
+    outfile))
+
+(defn make-slide-video
+  [n img time]
+  (println "Making" time "second video of image" img)
+  (let [proc (.exec (Runtime/getRuntime) (str "ffmpeg -framerate 1/" time " -i " img " -c:v libx264 -pix_fmt yuv420p slide-" n ".mp4"))
+        ret (.waitFor proc)]
+    (if (= 0 ret)
+      (str "slide-" n ".mp4")
+      nil)))
+
+(defn make-slides-video
+  [[urls times]]
+  (let [images (doall (map fetch-image urls))
+        durations (conj
+                   (into [] (map #(- (second %) (first %))
+                                 (partition 2 1 times)))
+                   1)
+        videos (map-indexed (fn [n [i t]] (make-slide-video n i t))
+                            (map vector images durations))
+        video-list "slide-list.txt"
+        _ (with-open [out (io/writer video-list)]
+                     (doall (for [v videos]
+                              (.write out (str "file '" v "'\n")))))
+        proc (.exec (Runtime/getRuntime)
+                    (str "ffmpeg -f concat -i " video-list " -c copy slides.mp4"))
+        ret (.waitFor proc)]
+    (if (= 0 ret)
+      "slides.mp4"
+      nil)))
+
 (defn fetch-video
   [url referrer cookies]
   (let [outfile (str "video." (last (split url #"\.")))]
     (println "Saving" url "to" outfile "...")
-    (println "Cookies are" (str cookies))
-    (with-open [in (http/get url {:headers {"Referer" referrer}
-                                  :cookies cookies
-                                  :client-params {"http.useragent"
-                                                  user-agent}
-                                  :as :stream})
-                out (io/output-stream outfile)]
-      (io/copy (:body in) out))))
+    ;(println "Cookies are" (str cookies))
+    (try
+      (with-open [in (:body
+                      (http/get url {:headers {"Referer" referrer}
+                                     :cookies cookies
+                                     :client-params {"http.useragent"
+                                                     user-agent}
+                                     :as :stream}))
+                  out (io/output-stream outfile)]
+        (io/copy in out))
+      outfile
+      (catch Exception _ nil))))
 
 (defn- not-nil? [x] (not (nil? x)))
 
@@ -100,8 +142,15 @@
       (nil? video-url) (println "Failed to find video URL.")
       (nil? slides) (println "Failed to find slides URLs/times.")
       (nil? cf-cookies) (println "Failed to find CloudFront cookies.")
-      :else (do
-              (fetch-video video-url url (into {} [cf-cookies (:cookies page)]))))))
+      :else (let [video (fetch-video video-url url (into {} [cf-cookies (:cookies page)]))
+                  slides-video (make-slides-video slides)
+                  outfile (str (last (split url #"/")) ".mp4")
+                  proc (.exec (Runtime/getRuntime)
+                              (str "ffmpeg -i " slides-video " -i " video " -filter_complex \"[1]scale=iw/8,ih/8 [pip]; [0][pip] overlay=main_w-overlay_w:main_h-overlay_h\" " outfile))
+                  ret (.waitFor proc)]
+              (if (zero? ret)
+                (println "Wrote video to" outfile)
+                (println "Failed to compose video"))))))
 
 (defn -main
   "Run it. TODO: add argument parsing and options. But not now."
