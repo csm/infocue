@@ -146,7 +146,7 @@
                   slides-video (make-slides-video slides)
                   outfile (str (last (split url #"/")) ".mp4")
                   proc (.exec (Runtime/getRuntime)
-                              (str "ffmpeg -i " slides-video " -i " video " -filter_complex \"[1]scale=iw/8,ih/8 [pip]; [0][pip] overlay=main_w-overlay_w:main_h-overlay_h\" " outfile))
+                              (str "ffmpeg -i " slides-video " -i " video " -filter_complex \"[1]scale=iw/8:ih/8 [pip]; [0][pip] overlay=main_w-overlay_w:main_h-overlay_h\" " outfile))
                   ret (.waitFor proc)]
               (if (zero? ret)
                 (println "Wrote video to" outfile)
