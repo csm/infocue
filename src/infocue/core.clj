@@ -141,6 +141,7 @@
       keyword))
 
 (defn duration->secs
+  "Parse HH:MM:SS string into seconds."
   [d]
   (let [[h m s] (string/split (string/trim d) #":")]
     (+ (* (Integer/parseInt h) 3600)
@@ -185,6 +186,11 @@
          "[b][a] overlay=0:0")))
 
 (defn make-presentation-video
+  "Fetch an InfoQ presentation (speaker video & slide deck) from
+   url, and create a video that combines the speaker video and slides.
+   The output video is 1280x720; the slides are scaled to fit the height
+   and are right-aligned; the speaker video is squished into the upper
+   left corner."
   [url]
   (let [page (http/get url {:client-params
                             {"http.useragent" user-agent}})

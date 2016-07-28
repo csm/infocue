@@ -35,3 +35,15 @@ CloudFront-Signature=UjNopIX4IvmyqNYqY-E~eXxe8Kr-d9lO35rIavBf5pjSmeTY91ZiaO8g1JG
 CloudFront-Policy=eyJTdGF0ZW1lbnQiOiBbeyJSZXNvdXJjZSI6IioiLCJDb25kaXRpb24iOnsiRGF0ZUxlc3NUaGFuIjp7IkFXUzpFcG9jaFRpbWUiOjE0Njk2OTA4ODl9LCJJcEFkZHJlc3MiOnsiQVdTOlNvdXJjZUlwIjoiMC4wLjAuMC8wIn19fV19;
 CloudFront-Key-Pair-Id=APKAIMZVI7QH4C5YKH6Q
 ```
+
+## Slide videos
+
+Right now I'm just generating a video of the appropriate length for
+each slide, then concatenating them all. The generation of static
+images into videos (at the right frame rate) takes a long time, and it
+seems like that could be sped up.
+
+Note that I think we need to have the slide video framerate match
+(close enough) the speaker video framerate, because if we use say a
+very low framerate (one per second?) for the slides, the speaker video
+seems to get downsampled to that rate. I don't know. Ffmpeg is weird.

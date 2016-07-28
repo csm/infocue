@@ -8,3 +8,4 @@ Usage:
 
     lein run <url>
 
+Requires ffmpeg and exiftool installed and in your PATH.
