@@ -141,24 +141,26 @@
 (defn make-slide-video
   [n img time]
   (println "Making" time "second video of image" img)
-  (let [outfile (str (:scratch *config*) "/slide-" n ".mp4")
-        info (get-exif-info img)
-        width (to-even (:image-width info))
-        height (to-even (:image-height info))
-        ret (sh "ffmpeg" "-y" "-loglevel" "quiet"
-                "-framerate" (str "1/" time)
-                "-i" img "-c:v" "libx264"
-                "-pix_fmt" "yuv420p" "-r" "30"
-                "-s" (str width "x" height)
-                outfile)]
-    (if (zero? (:exit ret))
+  (let [outfile (str (:scratch *config*) "/slide-" n ".mp4")]
+    (if (.exists (io/file outfile))
       outfile
-      (throw (Exception. (str "error making slide video: "
-                              (:err ret)))))))
+      (let [info (get-exif-info img)
+            width (to-even (:image-width info))
+            height (to-even (:image-height info))
+            ret (sh "ffmpeg" "-y" "-loglevel" "quiet"
+                    "-framerate" (str "1/" time)
+                    "-i" img "-c:v" "libx264"
+                    "-pix_fmt" "yuv420p" "-r" "30"
+                    "-s" (str width "x" height)
+                    outfile)]
+        (if (zero? (:exit ret))
+          outfile
+          (throw (Exception. (str "error making slide video: "
+                                  (:err ret)))))))))
 
 (defn make-slides-video
   [[urls times]]
-  (let [outfile (str (:scratch *config*) "slides.mp4")
+  (let [outfile (str (:scratch *config*) "/slides.mp4")
         images (doall (map fetch-image urls))
         durations (conj
                    (into [] (map #(- (second %) (first %))
@@ -204,8 +206,13 @@
   (let [slide-height (:image-height slide-info)
         slide-width (int (* (:image-width slide-info) (/ h slide-height)))
         slide-padding (- w slide-width)
-        video-height (int (* (:image-height video-info) (/ slide-padding (:image-width video-info))))]
-    (str "[1] scale=" slide-padding ":" video-height " [a];"
+        ; if the slides are 16/9, make sure we have our speaker
+        ; visible at all. Note, we don't handle wider slides than
+        ; 16/9 yet. Oops!
+        ; Give the speaker a 1/8 width postage stamp to live in.
+        video-width (max slide-padding (/ w 8))
+        video-height (int (* (:image-height video-info) (/ video-width (:image-width video-info))))]
+    (str "[1] scale=" video-width ":" video-height " [a];"
          "[0] scale=" slide-width ":" h ","
          " pad=" w ":" h ":" slide-padding ":" 0 " [b];"
          "[b][a] overlay=0:0")))
@@ -251,9 +258,10 @@
               (if (zero? (:exit ret))
                 (println "Wrote video to" outfile)
                 (println "Failed to compose video, error:" (:err ret)))
-              (when (not (:keep *config*))
-                (doseq [f (.listFiles (io/file (:scratch *config*)))]
-                  (io/delete-file f)))))))
+              ;; (when (not (:keep *config*))
+              ;;   (doseq [f (.listFiles (io/file (:scratch *config*)))]
+              ;;     (io/delete-file f)))
+              ))))
 
 (def cli-opts
   [["-w" "--width W" "Video width."
