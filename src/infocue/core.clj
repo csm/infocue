@@ -144,7 +144,15 @@
   (let [outfile (str (:scratch *config*) "/slide-" n ".mp4")]
     (if (.exists (io/file outfile))
       outfile
-      (let [info (get-exif-info img)
+      (let [ ; some slideshows are .swf (╯°□°）╯︵ ┻━┻
+            img (if (.endsWith img ".swf")
+                  (let [pngout (string/replace img #"\.swf$" ".png")
+                        ret (sh "swfrender" img "-o" pngout)]
+                    (if (zero? (:exit ret))
+                      pngout
+                      (throw (Exception. (str "Failed to convert SWF to PNG. Fuck it. Message: " (:err ret))))))
+                  img)
+            info (get-exif-info img)
             width (to-even (:image-width info))
             height (to-even (:image-height info))
             ret (sh "ffmpeg" "-y" "-loglevel" "quiet"

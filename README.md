@@ -8,4 +8,12 @@ Usage:
 
     lein run <url>
 
-Requires ffmpeg and exiftool installed and in your PATH.
+Requires `ffmpeg`, `exiftool`, and `swfrender` installed and in your
+PATH. Using Homebrew:
+
+    brew install ffmpeg
+    brew install exiftool
+    brew install swftools
+
+For other systems perform whichever other incantation manifests the
+magic for you.
