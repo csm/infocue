@@ -4,9 +4,56 @@
             [clj-http.client :as http]
             [clojure.java.io :as io]
             [clojure.java.shell :refer [sh]]
-            [clojure.string :as string])
+            [clojure.string :as string]
+            [clojure.tools.cli :refer [parse-opts]])
   (:import [javax.script ScriptEngineManager ScriptException])
   (:gen-class))
+
+(def ^:dynamic *config*
+  {:width 1280
+   :height 720
+   :scratch "scratch"
+   :output "out.mp4"
+   :user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36"})
+
+(defn- not-nil? [x] (not (nil? x)))
+
+(defn keywordize
+  [s]
+  (-> (string/trim s)
+      (.toLowerCase)
+      (string/replace #"[ ]+" "-")
+      keyword))
+
+(defn duration->secs
+  "Parse HH:MM:SS string into seconds."
+  [d]
+  (let [[h m s] (string/split (string/trim d) #":")]
+    (+ (* (Integer/parseInt h) 3600)
+       (* (Integer/parseInt m) 60)
+       (Integer/parseInt s))))
+
+(defn parse-exif-value
+  "Try parsing a exiftool string value as a int, double, duration, or
+   date. Otherwise, just return the string."
+  [s]
+  (condp re-matches (string/trim s)
+    #"^[0-9]+$" (Long/parseLong (string/trim s))
+    #"^[0-9]*\.[0-9]+([eE][-+]?[0-9]+)?" (Double/parseDouble s)
+    #"^[0-9]+:[0-9]{2}:[0-9]{2}$" (duration->secs s)
+    #"^[0-9]+[ ]*s$" (Long/parseLong (string/trim (first (string/split s #"s"))))
+    (string/trim s)))
+
+(defn get-exif-info
+  "Parse information about a video file, returning a map of useful
+   information about the video. Should at least contain fields
+   :image-width, :image-height, and :duration."
+  [f]
+  (let [out (sh "exiftool" f)
+        lines (string/split (:out out) #"\n")]
+    (into {}
+          (map (fn [[k v]] [(keywordize k) (parse-exif-value v)])
+               (map #(string/split % #":" 2) lines)))))
 
 (defn js-engine
   []
@@ -76,99 +123,77 @@
 
 (defn fetch-image
   [url]
-  (let [outfile (str "image-" (last (string/split url #"/")))]
-    (println "fetching" url "to" outfile "...")
-    (with-open [in (:body (http/get url {:as :stream}))
-                out (io/output-stream outfile)]
-      (io/copy in out))
+  (let [outfile (str (:scratch *config*)
+                     "/image-" (last (string/split url #"/")))]
+    (when (not (.exists (io/file outfile)))
+      (println "fetching" url "to" outfile "...")
+      (with-open [in (:body (http/get url {:as :stream}))
+                  out (io/output-stream outfile)]
+        (io/copy in out)))
     outfile))
+
+(defn to-even
+  [v]
+  (if (even? v)
+    v
+    (inc v)))
 
 (defn make-slide-video
   [n img time]
   (println "Making" time "second video of image" img)
-  (let [ret (sh "ffmpeg" "-y" "-loglevel" "quiet"
+  (let [outfile (str (:scratch *config*) "/slide-" n ".mp4")
+        info (get-exif-info img)
+        width (to-even (:image-width info))
+        height (to-even (:image-height info))
+        ret (sh "ffmpeg" "-y" "-loglevel" "quiet"
                 "-framerate" (str "1/" time)
                 "-i" img "-c:v" "libx264"
                 "-pix_fmt" "yuv420p" "-r" "30"
-                (str "slide-" n ".mp4"))]
+                "-s" (str width "x" height)
+                outfile)]
     (if (zero? (:exit ret))
-      (str "slide-" n ".mp4")
-      nil)))
+      outfile
+      (throw (Exception. (str "error making slide video: "
+                              (:err ret)))))))
 
 (defn make-slides-video
   [[urls times]]
-  (let [images (doall (map fetch-image urls))
+  (let [outfile (str (:scratch *config*) "slides.mp4")
+        images (doall (map fetch-image urls))
         durations (conj
                    (into [] (map #(- (second %) (first %))
                                  (partition 2 1 times)))
                    1)
         videos (map-indexed (fn [n [i t]] (make-slide-video n i t))
                             (map vector images durations))
-        video-list "slide-list.txt"
+        video-list (str (:scratch *config*) "/slide-list.txt")
         _ (with-open [out (io/writer video-list)]
                      (doall (for [v videos]
-                              (.write out (str "file '" v "'\n")))))
-        ret (sh "ffmpeg" "-y" "-loglevel" "-quiet"
-                "-f" "concat" "-i" video-list "-c" "copy" "slides.mp4")]
+                              (.write out (str "file '" (last (string/split v #"/")) "'\n")))))
+        ret (sh "ffmpeg" "-y" "-loglevel" "quiet"
+                "-f" "concat" "-i" video-list "-c" "copy" outfile)]
     (if (zero? (:exit ret))
-      "slides.mp4"
+      outfile
       nil)))
 
 (defn fetch-video
   [url referrer cookies]
-  (let [outfile (str "video." (last (string/split url #"\.")))]
+  (let [outfile (str (:scratch *config*)
+                     "/video." (last (string/split url #"\.")))]
     (println "Saving" url "to" outfile "...")
     ;(println "Cookies are" (str cookies))
     (try
-      (with-open [in (:body
-                      (http/get url {:headers {"Referer" referrer}
-                                     :cookies cookies
-                                     :client-params {"http.useragent"
-                                                     user-agent}
-                                     :as :stream}))
-                  out (io/output-stream outfile)]
-        (io/copy in out))
+      (when (not (.exists (io/file outfile)))
+        (with-open [in (:body
+                        (http/get url {:headers {"Referer" referrer}
+                                       :cookies cookies
+                                       :client-params {"http.useragent"
+                                                       user-agent}
+                                       :as :stream}))
+                    out (io/output-stream outfile)]
+          (io/copy in out)))
       outfile
       (catch Exception _ nil))))
-
-(defn- not-nil? [x] (not (nil? x)))
-
-(defn keywordize
-  [s]
-  (-> (string/trim s)
-      (.toLowerCase)
-      (string/replace #"[ ]+" "-")
-      keyword))
-
-(defn duration->secs
-  "Parse HH:MM:SS string into seconds."
-  [d]
-  (let [[h m s] (string/split (string/trim d) #":")]
-    (+ (* (Integer/parseInt h) 3600)
-       (* (Integer/parseInt m) 60)
-       (Integer/parseInt s))))
-
-(defn parse-video-value
-  "Try parsing a exiftool string value as a int, double, duration, or
-   date. Otherwise, just return the string."
-  [s]
-  (condp re-matches (string/trim s)
-    #"^[0-9]+$" (Long/parseLong (string/trim s))
-    #"^[0-9]*\.[0-9]+([eE][-+]?[0-9]+)?" (Double/parseDouble s)
-    #"^[0-9]+:[0-9]{2}:[0-9]{2}$" (duration->secs s)
-    #"^[0-9]+[ ]*s$" (Long/parseLong (string/trim (first (string/split s #"s"))))
-    (string/trim s)))
-
-(defn get-video-info
-  "Parse information about a video file, returning a map of useful
-   information about the video. Should at least contain fields
-   :image-width, :image-height, and :duration."
-  [f]
-  (let [out (sh "exiftool" f)
-        lines (string/split (:out out) #"\n")]
-    (into {}
-          (map (fn [[k v]] [(keywordize k) (parse-video-value v)])
-               (map #(string/split % #":" 2) lines)))))
 
 (defn compute-filter
   "Create an ffmpeg filter that will combine the slides video
@@ -192,6 +217,8 @@
    and are right-aligned; the speaker video is squished into the upper
    left corner."
   [url]
+  (when (not (.exists (io/file (:scratch *config*))))
+    (.mkdirs (io/file (:scratch *config*))))
   (let [page (http/get url {:client-params
                             {"http.useragent" user-agent}})
         scripts (fetch-inline-scripts page)
@@ -203,24 +230,66 @@
       (nil? slides) (println "Failed to find slides URLs/times.")
       (nil? cf-cookies) (println "Failed to find CloudFront cookies.")
       :else (let [video (fetch-video video-url url (into {} [cf-cookies (:cookies page)]))
+                  _ (when (nil? video)
+                      (throw (Exception. "Failed to download video.")))
                   slides-video (make-slides-video slides)
-                  video-info (get-video-info video)
-                  slides-info (get-video-info video)
+                  _ (when (nil? slides-video)
+                      (throw (Exception. "Failed to create slides video.")))
+                  video-info (get-exif-info video)
+                  slides-info (get-exif-info video)
                   outfile (str (last (string/split url #"/")) ".mp4")
                   ret (sh "ffmpeg" "-i" slides-video
                           "-i" video
-                          "-s" "1280x720"
+                          "-s" (str (:width *config*) "x" (:height *config*))
                           "-loglevel" "quiet"
+                          "-y"
                           "-filter_complex"
-                          (compute-filter 1280 720 slides-info video-info)
+                          (compute-filter (:width *config*)
+                                          (:height *config*)
+                                          slides-info video-info)
                           outfile)]
               (if (zero? (:exit ret))
                 (println "Wrote video to" outfile)
-                (println "Failed to compose video"))))))
+                (println "Failed to compose video, error:" (:err ret)))
+              (when (not (:keep *config*))
+                (doseq [f (.listFiles (io/file (:scratch *config*)))]
+                  (io/delete-file f)))))))
+
+(def cli-opts
+  [["-w" "--width W" "Video width."
+    :default 1280
+    :parse-fn #(Integer/parseInt %)
+    :validate [#(> 0 %) "Must be positive"]]
+   ["-h" "--height H" "Video height."
+    :default 720
+    :parse-fn #(Integer/parseInt %)
+    :validate [#(> 0 %) "Must be positive"]]
+   ["-s" "--scratch DIR" "Use this as scratch directory."]
+   ["-o" "--output" "Set the output file, default uses the name in the URL."]
+   ["-k" "--keep" "Leave intermediate files when done."]
+   ["-a" "--user-agent STR" "Use custom user-agent string (default pretends to be Chrome on macOS)."]
+   ["-?" "--help" "Show this help."]])
 
 (defn -main
-  "Run it. TODO: add argument parsing and options. But not now."
+  "Run it."
   [& args]
-  (if-let [[url] args]
-    (make-presentation-video url)
-    (println "Usage: infocue.core <url>")))
+  (let [options (parse-opts args cli-opts)]
+    (when (-> options :options :help)
+      (println "Usage: infocue.core.main [options] URL")
+      (println)
+      (println (:summary options))
+      (System/exit 0))
+    (when (not (empty? (:errors options)))
+      (for [e (:errors options)]
+        (println e))
+      (System/exit 1))
+    (if-let [[url] (:arguments options)]
+      (with-bindings {#'*config* (merge *config*
+                                        {:scratch (str (last (string/split url #"/")) ".temp")
+                                         :output (str (last (string/split url #"/")) ".mp4")}
+                                        (:options options))}
+        (try
+          (make-presentation-video url)
+          (catch Exception e
+            (println "Error:" (.getMessage e)))))
+      (println "Usage: infocue.core <url>"))))
