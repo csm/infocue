@@ -3,7 +3,7 @@
             [hickory.select :as s]
             [clj-http.client :as http]
             [clojure.java.io :as io]
-            [clojure.java.shell :refer [sh]]
+            [clojure.java.shell :as shell]
             [clojure.string :as string]
             [clojure.tools.cli :refer [parse-opts]])
   (:import [javax.script ScriptEngineManager ScriptException])
@@ -17,6 +17,11 @@
    :user-agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36"})
 
 (defn- not-nil? [x] (not (nil? x)))
+
+(defn sh
+  [& args]
+  (println "running command: " (string/join " " args))
+  (apply shell/sh args))
 
 (defn keywordize
   [s]
@@ -251,7 +256,7 @@
                   _ (when (nil? slides-video)
                       (throw (Exception. "Failed to create slides video.")))
                   video-info (get-exif-info video)
-                  slides-info (get-exif-info video)
+                  slides-info (get-exif-info slides-video)
                   outfile (str (last (string/split url #"/")) ".mp4")
                   ret (sh "ffmpeg" "-i" slides-video
                           "-i" video
