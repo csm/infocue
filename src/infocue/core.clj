@@ -102,8 +102,9 @@
   [s]
   (let [engine (js-engine)
         script (str "(function() {\n"
-                    s
-                    "  return {\"CloudFront-Policy\": InfoQConstants.scp, \"CloudFront-Signature\": InfoQConstants.scs, \"CloudFront-Key-Pair-Id\": InfoQConstants.sck};\n"
+                    "var window = {};\n"
+                    s "\n"
+                    "return {\"CloudFront-Policy\": InfoQConstants.scp, \"CloudFront-Signature\": InfoQConstants.scs, \"CloudFront-Key-Pair-Id\": InfoQConstants.sck};\n"
                     "})()")]
     (try
       (into {} (for [[k v] (.eval engine script)] {k {:value v}}))
@@ -143,6 +144,25 @@
     v
     (inc v)))
 
+(defn swf-to-png
+  "Try converting an SWF file to PNG."
+  [img]
+  (let [pngout (string/replace img #"\.swf$" ".png")
+        ret (sh "swfrender" img "-o" pngout)]
+    (if (zero? (:exit ret))
+      pngout
+      ; swfrender can't handle certain SWF files.
+      ; we get 'rfxswf: Error: No JPEG library compiled in'
+      ; maybe an option to homebrew, or install manually
+      (let [ret (sh "ffmpeg" "-i" img "-f" "image2" "-vcodec" "png" (str pngout ".%02d"))]
+        (if (zero? (:exit ret))
+          (if (.renameTo
+               (io/file (last (string/split (:out (sh "bash" "-c" (str "ls " pngout ".*"))) #"\n")))
+               (io/file pngout))
+            pngout
+            (throw (Exception. (str "Converted SWF, but couldn't rename the last file produced. Well shit."))))
+          (throw (Exception. (str "Failed to convert SWF to PNG. Fuck it."))))))))
+
 (defn make-slide-video
   [n img time]
   (println "Making" time "second video of image" img)
@@ -151,11 +171,7 @@
       outfile
       (let [ ; some slideshows are .swf (╯°□°）╯︵ ┻━┻
             img (if (.endsWith img ".swf")
-                  (let [pngout (string/replace img #"\.swf$" ".png")
-                        ret (sh "swfrender" img "-o" pngout)]
-                    (if (zero? (:exit ret))
-                      pngout
-                      (throw (Exception. (str "Failed to convert SWF to PNG. Fuck it. Message: " (:err ret))))))
+                  (swf-to-png img)
                   img)
             info (get-exif-info img)
             width (to-even (:image-width info))
